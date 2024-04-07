@@ -329,6 +329,12 @@ func New(ctx context.Context, stack *node.Node, config *ethconfig.Config, logger
 		if chainConfig.EcotoneTime == nil {
 			log.Warn("Optimism EcotoneTime has not been set")
 		}
+		if chainConfig.PreContractForkBlock == nil {
+			log.Warn("Optimism PreContractForkBlock has not been set")
+		}
+		if chainConfig.FermatBlock == nil {
+			log.Warn("Optimism FermatBlock has not been set")
+		}
 	}
 
 	// Check if we have an already initialized chain and fall back to

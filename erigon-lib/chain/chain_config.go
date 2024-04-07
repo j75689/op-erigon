@@ -74,6 +74,9 @@ type Config struct {
 	// Delta: the Delta upgrade does not affect the execution-layer, and is thus not configurable in the chain config.
 	EcotoneTime *big.Int `json:"ecotoneTime,omitempty"` // Ecotone switch time (nil = no fork, 0 = already on optimism ecotone)
 
+	PreContractForkBlock *big.Int `json:"preContractForkBlock,omitempty"` // Pre-contract switch block (nil = no fork, 0 = already on optimism pre-contract)
+	FermatBlock          *big.Int `json:"fermatBlock,omitempty"`          // Fermat switch block (nil = no fork, 0 = already on optimism fermat)
+
 	// Optional EIP-4844 parameters
 	MinBlobGasPrice            *uint64 `json:"minBlobGasPrice,omitempty"`
 	MaxBlobGasPerBlock         *uint64 `json:"maxBlobGasPerBlock,omitempty"`
@@ -108,7 +111,7 @@ func (o *OptimismConfig) String() string {
 func (c *Config) String() string {
 	engine := c.getEngine()
 
-	return fmt.Sprintf("{ChainID: %v, Homestead: %v, DAO: %v, Tangerine Whistle: %v, Spurious Dragon: %v, Byzantium: %v, Constantinople: %v, Petersburg: %v, Istanbul: %v, Muir Glacier: %v, Berlin: %v, London: %v, Arrow Glacier: %v, Gray Glacier: %v, Terminal Total Difficulty: %v, Merge Netsplit: %v, Shanghai: %v, Cancun: %v, Prague: %v, Engine: %v}",
+	return fmt.Sprintf("{ChainID: %v, Homestead: %v, DAO: %v, Tangerine Whistle: %v, Spurious Dragon: %v, Byzantium: %v, Constantinople: %v, Petersburg: %v, Istanbul: %v, Muir Glacier: %v, Berlin: %v, London: %v, Arrow Glacier: %v, Gray Glacier: %v, Terminal Total Difficulty: %v, Merge Netsplit: %v, Shanghai: %v, Cancun: %v, Prague: %v, PreContractFork: %v, Fermat: %v, Engine: %v}",
 		c.ChainID,
 		c.HomesteadBlock,
 		c.DAOForkBlock,
@@ -128,6 +131,8 @@ func (c *Config) String() string {
 		c.ShanghaiTime,
 		c.CancunTime,
 		c.PragueTime,
+		c.PreContractForkBlock,
+		c.FermatBlock,
 		engine,
 	)
 }
@@ -297,6 +302,10 @@ func (c *Config) IsEcotone(time uint64) bool {
 	return isForked(c.EcotoneTime, time)
 }
 
+func (c *Config) IsFermat(num uint64) bool {
+	return isForked(c.FermatBlock, num)
+}
+
 // IsOptimism returns whether the node is an optimism node or not.
 func (c *Config) IsOptimism() bool {
 	return c.Optimism != nil
@@ -322,6 +331,10 @@ func (c *Config) IsOptimismEcotone(time uint64) bool {
 // IsOptimismPreBedrock returns true iff this is an optimism node & bedrock is not yet active
 func (c *Config) IsOptimismPreBedrock(num uint64) bool {
 	return c.IsOptimism() && !c.IsBedrock(num)
+}
+
+func (c *Config) IsOptimismFermat(num uint64) bool {
+	return c.IsOptimism() && c.IsFermat(num)
 }
 
 // BaseFeeChangeDenominator bounds the amount the base fee can change between blocks.
@@ -728,6 +741,7 @@ type Rules struct {
 	IsBerlin, IsLondon, IsShanghai, IsCancun, IsPrague      bool
 	IsAura                                                  bool
 	IsOptimismBedrock, IsOptimismRegolith                   bool
+	IsOptimismFermat                                        bool
 }
 
 // Rules ensures c's ChainID is not nil and returns a new Rules instance
@@ -754,6 +768,7 @@ func (c *Config) Rules(num uint64, time uint64) *Rules {
 		IsAura:             c.Aura != nil,
 		IsOptimismBedrock:  c.IsOptimismBedrock(num),
 		IsOptimismRegolith: c.IsOptimismRegolith(time),
+		IsOptimismFermat:   c.IsOptimismFermat(num),
 	}
 }
 

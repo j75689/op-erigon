@@ -20,8 +20,12 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
-	"github.com/ledgerwatch/erigon-lib/crypto/blake2b"
+	"fmt"
 	"math/big"
+
+	"github.com/ledgerwatch/erigon-lib/crypto/blake2b"
+	"github.com/ledgerwatch/log/v3"
+	"github.com/prysmaticlabs/prysm/v4/crypto/bls"
 
 	"github.com/holiman/uint256"
 
@@ -31,6 +35,7 @@ import (
 
 	"github.com/ledgerwatch/erigon/common"
 	"github.com/ledgerwatch/erigon/common/math"
+	"github.com/ledgerwatch/erigon/core/vm/lightclient"
 	"github.com/ledgerwatch/erigon/crypto"
 	"github.com/ledgerwatch/erigon/crypto/bls12381"
 	"github.com/ledgerwatch/erigon/crypto/bn256"
@@ -126,12 +131,30 @@ var PrecompiledContractsBLS = map[libcommon.Address]PrecompiledContract{
 	libcommon.BytesToAddress([]byte{0x14}): &bls12381MapG2{},
 }
 
+// PrecompiledContractsFermat contains the default set of pre-compiled Ethereum
+// contracts used in the Fermat release.
+var PrecompiledContractsFermat = map[libcommon.Address]PrecompiledContract{
+	libcommon.BytesToAddress([]byte{1}): &ecrecover{},
+	libcommon.BytesToAddress([]byte{2}): &sha256hash{},
+	libcommon.BytesToAddress([]byte{3}): &ripemd160hash{},
+	libcommon.BytesToAddress([]byte{4}): &dataCopy{},
+	libcommon.BytesToAddress([]byte{5}): &bigModExp{eip2565: true},
+	libcommon.BytesToAddress([]byte{6}): &bn256AddIstanbul{},
+	libcommon.BytesToAddress([]byte{7}): &bn256ScalarMulIstanbul{},
+	libcommon.BytesToAddress([]byte{8}): &bn256PairingIstanbul{},
+	libcommon.BytesToAddress([]byte{9}): &blake2F{},
+
+	libcommon.BytesToAddress([]byte{102}): &blsSignatureVerify{},
+	libcommon.BytesToAddress([]byte{103}): &cometBFTLightBlockValidate{},
+}
+
 var (
 	PrecompiledAddressesCancun    []libcommon.Address
 	PrecompiledAddressesBerlin    []libcommon.Address
 	PrecompiledAddressesIstanbul  []libcommon.Address
 	PrecompiledAddressesByzantium []libcommon.Address
 	PrecompiledAddressesHomestead []libcommon.Address
+	PrecompiledAddressesFermat    []libcommon.Address
 )
 
 func init() {
@@ -150,6 +173,9 @@ func init() {
 	for k := range PrecompiledContractsCancun {
 		PrecompiledAddressesCancun = append(PrecompiledAddressesCancun, k)
 	}
+	for k := range PrecompiledContractsFermat {
+		PrecompiledAddressesFermat = append(PrecompiledAddressesFermat, k)
+	}
 }
 
 // ActivePrecompiles returns the precompiles enabled with the current configuration.
@@ -163,6 +189,8 @@ func ActivePrecompiles(rules *chain.Rules) []libcommon.Address {
 		return PrecompiledAddressesIstanbul
 	case rules.IsByzantium:
 		return PrecompiledAddressesByzantium
+	case rules.IsOptimismFermat:
+		return PrecompiledAddressesFermat
 	default:
 		return PrecompiledAddressesHomestead
 	}
@@ -1097,4 +1125,108 @@ func (c *pointEvaluation) RequiredGas(input []byte) uint64 {
 
 func (c *pointEvaluation) Run(input []byte) ([]byte, error) {
 	return libkzg.PointEvaluationPrecompile(input)
+}
+
+// blsSignatureVerify implements bls signature verification precompile.
+type blsSignatureVerify struct{}
+
+const (
+	msgHashLength         = uint64(32)
+	signatureLength       = uint64(96)
+	singleBlsPubkeyLength = uint64(48)
+)
+
+// RequiredGas returns the gas required to execute the pre-compiled contract.
+func (c *blsSignatureVerify) RequiredGas(input []byte) uint64 {
+	msgAndSigLength := msgHashLength + signatureLength
+	inputLen := uint64(len(input))
+	if inputLen <= msgAndSigLength ||
+		(inputLen-msgAndSigLength)%singleBlsPubkeyLength != 0 {
+		return params.BlsSignatureVerifyBaseGas
+	}
+	pubKeyNumber := (inputLen - msgAndSigLength) / singleBlsPubkeyLength
+	return params.BlsSignatureVerifyBaseGas + pubKeyNumber*params.BlsSignatureVerifyPerKeyGas
+}
+
+// Run input:
+// msg      | signature | [{bls pubkey}] |
+// 32 bytes | 96 bytes  | [{48 bytes}]   |
+func (c *blsSignatureVerify) Run(input []byte) ([]byte, error) {
+	msgAndSigLength := msgHashLength + signatureLength
+	inputLen := uint64(len(input))
+	if inputLen <= msgAndSigLength ||
+		(inputLen-msgAndSigLength)%singleBlsPubkeyLength != 0 {
+		log.Debug("blsSignatureVerify input size wrong", "inputLen", inputLen)
+		return nil, ErrExecutionReverted
+	}
+
+	var msg [32]byte
+	msgBytes := getData(input, 0, msgHashLength)
+	copy(msg[:], msgBytes)
+
+	signatureBytes := getData(input, msgHashLength, signatureLength)
+	sig, err := bls.SignatureFromBytes(signatureBytes)
+	if err != nil {
+		log.Debug("blsSignatureVerify invalid signature", "err", err)
+		return nil, ErrExecutionReverted
+	}
+
+	pubKeyNumber := (inputLen - msgAndSigLength) / singleBlsPubkeyLength
+	pubKeys := make([]bls.PublicKey, pubKeyNumber)
+	for i := uint64(0); i < pubKeyNumber; i++ {
+		pubKeyBytes := getData(input, msgAndSigLength+i*singleBlsPubkeyLength, singleBlsPubkeyLength)
+		pubKey, err := bls.PublicKeyFromBytes(pubKeyBytes)
+		if err != nil {
+			log.Debug("blsSignatureVerify invalid pubKey", "err", err)
+			return nil, ErrExecutionReverted
+		}
+		pubKeys[i] = pubKey
+	}
+
+	if pubKeyNumber > 1 {
+		if !sig.FastAggregateVerify(pubKeys, msg) {
+			return libcommon.Big0.Bytes(), nil
+		}
+	} else {
+		if !sig.Verify(pubKeys[0], msgBytes) {
+			return libcommon.Big0.Bytes(), nil
+		}
+	}
+
+	return big1.Bytes(), nil
+}
+
+// cometBFTLightBlockValidate implemented as a native contract. Used to validate the light  blocks for CometBFT v0.37.0
+// and its compatible version. Besides, in order to support the BLS cross-chain infrastructure, the SetRelayerAddress
+// and SetBlsKey methods should be implemented for the validator.
+type cometBFTLightBlockValidate struct{}
+
+func (c *cometBFTLightBlockValidate) RequiredGas(input []byte) uint64 {
+	return params.CometBFTLightBlockValidateGas
+}
+
+func (c *cometBFTLightBlockValidate) Run(input []byte) (result []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("internal error: %v\n", r)
+		}
+	}()
+
+	cs, block, err := lightclient.DecodeLightBlockValidationInput(input)
+	if err != nil {
+		return nil, err
+	}
+
+	validatorSetChanged, err := cs.ApplyLightBlock(block)
+	if err != nil {
+		return nil, err
+	}
+
+	consensusStateBytes, err := cs.EncodeConsensusState()
+	if err != nil {
+		return nil, err
+	}
+
+	result = lightclient.EncodeLightBlockValidationResult(validatorSetChanged, consensusStateBytes)
+	return result, nil
 }

@@ -17,8 +17,9 @@
 package params
 
 import (
-	libcommon "github.com/ledgerwatch/erigon-lib/common"
 	"math/big"
+
+	libcommon "github.com/ledgerwatch/erigon-lib/common"
 
 	"github.com/ledgerwatch/erigon-lib/common"
 )
@@ -176,6 +177,11 @@ const (
 
 	// EIP-4844: Shard Blob Transactions
 	PointEvaluationGas uint64 = 50000
+
+	// opBNB: the gas for Fermat precompile contracts
+	CometBFTLightBlockValidateGas uint64 = 3000 // Gas for validate cometBFT light block
+	BlsSignatureVerifyBaseGas     uint64 = 1000 // base price for a BLS signature verify operation
+	BlsSignatureVerifyPerKeyGas   uint64 = 3500 // Per-key price for a BLS signature verify operation
 )
 
 // EIP-4788: Beacon block root in the EVM

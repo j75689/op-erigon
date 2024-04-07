@@ -45,6 +45,8 @@ func (evm *EVM) precompile(addr libcommon.Address) (PrecompiledContract, bool) {
 		precompiles = PrecompiledContractsIstanbul
 	case evm.chainRules.IsByzantium:
 		precompiles = PrecompiledContractsByzantium
+	case evm.chainRules.IsOptimismFermat:
+		precompiles = PrecompiledContractsFermat
 	default:
 		precompiles = PrecompiledContractsHomestead
 	}
